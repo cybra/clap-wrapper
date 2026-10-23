@@ -2395,7 +2395,9 @@ OSStatus WrapAsAUV2::SaveState(CFPropertyListRef *ptPList)
 {
   if (!ptPList) return kAudioUnitErr_InvalidParameter;
 
-  if (!IsInitialized()) return kAudioUnitErr_Uninitialized;
+  // The plugin is made with the unit, so its state is there to save before the
+  // unit is initialized and after it is uninitialized, as hosts save sessions.
+  if (!_plugin) return kAudioUnitErr_Uninitialized;
 
   auto guarantee_mainthread = _plugin->AlwaysMainThread();
 
@@ -2463,7 +2465,8 @@ OSStatus WrapAsAUV2::RestoreState(CFPropertyListRef plist)
 {
   if (!plist) return kAudioUnitErr_InvalidParameter;
 
-  if (!IsInitialized()) return kAudioUnitErr_Uninitialized;
+  // Hosts opening a session restore a unit's state before they initialize it.
+  if (!_plugin) return kAudioUnitErr_Uninitialized;
 
   CFDictionaryRef tDict = CFDictionaryRef(plist);
 
