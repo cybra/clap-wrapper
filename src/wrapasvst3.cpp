@@ -608,7 +608,8 @@ tresult PLUGIN_API ClapAsVst3::setBusArrangements(Vst::SpeakerArrangement *input
           request.port_details = &ambisonicConfigs[i];
           describesLayout = true;
         }
-        else if (Clap::Vst3Channels::channelMapFromArrangement(arrangement, channelMaps[i]))
+        else if (Clap::Vst3Channels::channelMapFromArrangement(arrangement, channelMaps[i],
+                                                               _plugin->_ext._wideSpeakers != nullptr))
         {
           // the channel count alone cannot tell 7.1 Cine from 7.1 Music from 5.1.2, nor
           // say which channel carries the LFE, so send the positions the host asked for

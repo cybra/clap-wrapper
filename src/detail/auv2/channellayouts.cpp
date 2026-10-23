@@ -2,6 +2,8 @@
 
 #include <clap/clap.h>
 
+#include "clapwrapper/wide_speakers.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
@@ -10,7 +12,7 @@ namespace Clap::AUv2::ChannelLayouts
 {
 namespace
 {
-int positionOf(AudioChannelLabel label, bool hasRearPair)
+int positionOf(AudioChannelLabel label, bool hasRearPair, bool wideSpeakers)
 {
   switch (label)
   {
@@ -62,6 +64,10 @@ int positionOf(AudioChannelLabel label, bool hasRearPair)
       return CLAP_SURROUND_TSL;
     case kAudioChannelLabel_RightTopMiddle:
       return CLAP_SURROUND_TSR;
+    case kAudioChannelLabel_LeftWide:
+      return wideSpeakers ? CLAP_WRAPPER_SURROUND_LW : -1;
+    case kAudioChannelLabel_RightWide:
+      return wideSpeakers ? CLAP_WRAPPER_SURROUND_RW : -1;
     default:
       return -1;
   }
@@ -97,7 +103,7 @@ bool describe(const AudioChannelLayout &layout, std::vector<std::byte> &storage,
 }
 }  // namespace
 
-bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positions)
+bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positions, bool wideSpeakers)
 {
   std::vector<std::byte> storage;
   const AudioChannelLayout *described = nullptr;
@@ -118,7 +124,7 @@ bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positio
   uint64_t seen = 0;
   for (UInt32 i = 0; i < count; ++i)
   {
-    const int position = positionOf(descriptions[i].mChannelLabel, hasRearPair);
+    const int position = positionOf(descriptions[i].mChannelLabel, hasRearPair, wideSpeakers);
     if (position < 0 || ((seen >> position) & 1u)) return false;
     seen |= uint64_t{1} << position;
     positions.push_back(static_cast<uint8_t>(position));
@@ -126,11 +132,11 @@ bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positio
   return !positions.empty();
 }
 
-bool positionsOf(AudioChannelLayoutTag tag, std::vector<uint8_t> &positions)
+bool positionsOf(AudioChannelLayoutTag tag, std::vector<uint8_t> &positions, bool wideSpeakers)
 {
   AudioChannelLayout layout{};
   layout.mChannelLayoutTag = tag;
-  return positionsOf(layout, positions);
+  return positionsOf(layout, positions, wideSpeakers);
 }
 
 const std::vector<AudioChannelLayoutTag> &candidateTags()
@@ -159,6 +165,7 @@ const std::vector<AudioChannelLayoutTag> &candidateTags()
       kAudioChannelLayoutTag_Atmos_7_1_4,
       kAudioChannelLayoutTag_Logic_Atmos_7_1_4_B,
       kAudioChannelLayoutTag_Logic_Atmos_7_1_6,
+      kAudioChannelLayoutTag_Atmos_9_1_6,
   };
   return tags;
 }

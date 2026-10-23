@@ -11,6 +11,8 @@
 
 #include "channelmap.h"
 
+#include "clapwrapper/wide_speakers.h"
+
 namespace Clap::Vst3Channels
 {
 using namespace Steinberg;
@@ -37,6 +39,10 @@ using namespace Steinberg;
   // center pair Lcs/Rcs, the whole bottom layer (Bfl .. Brr), the proximity pair Pl/Pr and
   // the ambisonic components. An arrangement using one of them cannot be described to the
   // plugin, and the caller falls back to the channel count alone.
+  //
+  // ** Lw/Rw, the wide pair of Dolby's 9.1.4 and 9.1.6, have the positions of
+  // clapwrapper/wide_speakers.h, used only with a plugin that takes them. They come last
+  // in both numberings, so the table's order is still each one's ascending order.
 
   static const struct
   {
@@ -63,6 +69,8 @@ using namespace Steinberg;
       {Vst::kSpeakerTrr, CLAP_SURROUND_TBR},
       {Vst::kSpeakerTsl, CLAP_SURROUND_TSL},
       {Vst::kSpeakerTsr, CLAP_SURROUND_TSR},
+      {Vst::kSpeakerLw,  CLAP_WRAPPER_SURROUND_LW},
+      {Vst::kSpeakerRw,  CLAP_WRAPPER_SURROUND_RW},
   };
 
 // clang-format on
@@ -92,7 +100,7 @@ static Vst::Speaker speakerOf(uint8_t position)
   return 0;
 }
 
-bool channelMapFromArrangement(Vst::SpeakerArrangement arr, std::vector<uint8_t> &map)
+bool channelMapFromArrangement(Vst::SpeakerArrangement arr, std::vector<uint8_t> &map, bool wideSpeakers)
 {
   auto channelCount = Vst::SpeakerArr::getChannelCount(arr);
   if (channelCount <= 0)
@@ -105,7 +113,8 @@ bool channelMapFromArrangement(Vst::SpeakerArrangement arr, std::vector<uint8_t>
   for (int32 channel = 0; channel < channelCount; ++channel)
   {
     uint8_t position;
-    if (!clapPositionOf(Vst::SpeakerArr::getSpeaker(arr, channel), position))
+    if (!clapPositionOf(Vst::SpeakerArr::getSpeaker(arr, channel), position) ||
+        (!wideSpeakers && position >= CLAP_WRAPPER_SURROUND_LW))
     {
       return false;
     }

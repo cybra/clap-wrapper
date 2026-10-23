@@ -149,6 +149,9 @@ const clap_wrapper_host_information_t wrapper_host_information = {
     [](const clap_host_t *host) -> const char * { return self(host)->wrapper_flavor(); },
     [](const clap_host_t *host) -> const char * { return self(host)->underlying_host_name(); }};
 
+// offered by the wrappers whose formats name wide speakers (wide_speakers.h)
+const clap_wrapper_wide_speakers_t wide_speakers = {0};
+
 const clap_host_preset_load_t preset_load = {
     /* on_error */
     [](const clap_host_t *host, uint32_t location_kind, const char *location, const char *load_key,
@@ -247,6 +250,7 @@ void Plugin::connectClap(const clap_plugin_t *clap)
     getExtension(_plugin, _ext._configurable_audio_ports, CLAP_EXT_CONFIGURABLE_AUDIO_PORTS_COMPAT);
   getExtension(_plugin, _ext._surround, CLAP_EXT_SURROUND);
   if (!_ext._surround) getExtension(_plugin, _ext._surround, CLAP_EXT_SURROUND_COMPAT);
+  getExtension(_plugin, _ext._wideSpeakers, CLAP_WRAPPER_WIDE_SPEAKERS);
   getExtension(_plugin, _ext._ambisonic, CLAP_EXT_AMBISONIC);
   if (!_ext._ambisonic) getExtension(_plugin, _ext._ambisonic, CLAP_EXT_AMBISONIC_COMPAT);
   getExtension(_plugin, _ext._audio_ports_activation, CLAP_EXT_AUDIO_PORTS_ACTIVATION);
@@ -599,6 +603,15 @@ const void *Plugin::clapExtension(const clap_host *host, const char *extension)
   if (!strcmp(extension, CLAP_EXT_PRESET_LOAD) || !strcmp(extension, CLAP_EXT_PRESET_LOAD_COMPAT))
     return &HostExt::preset_load;
   if (!strcmp(extension, CLAP_WRAPPER_HOST_INFORMATION)) return &HostExt::wrapper_host_information;
+  if (!strcmp(extension, CLAP_WRAPPER_WIDE_SPEAKERS))
+  {
+    // the formats whose speaker arrangements name them, and whose wrappers map them
+    const char *flavor = HostExt::self(host)->wrapper_flavor();
+    if (flavor && (!strcmp(flavor, CLAP_WRAPPER_HOST_FLAVOR_VST3) ||
+                   !strcmp(flavor, CLAP_WRAPPER_HOST_FLAVOR_AUV2)))
+      return &HostExt::wide_speakers;
+    return nullptr;
+  }
   if (!strcmp(extension, CLAP_WRAPPER_STANDALONE_FEATURES))
     return HostExt::self(host)->standalone_features();
 

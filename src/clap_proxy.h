@@ -26,6 +26,7 @@
 
 #include "detail/clap/fsutil.h"
 #include "clapwrapper/standalone_features.h"
+#include "clapwrapper/wide_speakers.h"
 #include <clap/ext/draft/gain-adjustment-metering.h>
 
 namespace Clap
@@ -140,6 +141,8 @@ struct ClapPluginExtensions
   const clap_plugin_audio_ports_activation_t *_audio_ports_activation = nullptr;
   const clap_plugin_configurable_audio_ports_t *_configurable_audio_ports = nullptr;
   const clap_plugin_surround_t *_surround = nullptr;
+  // non-null when the plugin takes wide speakers in its channel maps (wide_speakers.h)
+  const clap_wrapper_wide_speakers_t *_wideSpeakers = nullptr;
   const clap_plugin_ambisonic_t *_ambisonic = nullptr;
   const clap_plugin_gui_t *_gui = nullptr;
   const clap_plugin_note_ports_t *_noteports = nullptr;

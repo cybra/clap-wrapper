@@ -43,8 +43,10 @@ namespace Clap::Vst3Channels
 {
 // Builds the CLAP channel map of an arrangement, in that arrangement's VST3 channel order.
 // Returns false - leaving map untouched - when the arrangement holds a speaker CLAP has no
-// position for, in which case no surround request can be made for it.
-bool channelMapFromArrangement(Steinberg::Vst::SpeakerArrangement arr, std::vector<uint8_t> &map);
+// position for, in which case no surround request can be made for it. The wide pair Lw Rw
+// counts as having positions only for a plugin that takes them (clapwrapper/wide_speakers.h).
+bool channelMapFromArrangement(Steinberg::Vst::SpeakerArrangement arr, std::vector<uint8_t> &map,
+                               bool wideSpeakers = false);
 
 // Builds the arrangement a CLAP channel map describes. Returns kEmpty when the map has no
 // VST3 equivalent: an unknown position, the same position twice, or - because the channels

@@ -26,11 +26,13 @@ namespace Clap::AUv2::ChannelLayouts
 {
 // The CLAP position of each channel of a layout, in the layout's own channel order.
 // Returns false when a channel's speaker has no CLAP position, or when two channels
-// have the same one.
-bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positions);
-bool positionsOf(AudioChannelLayoutTag tag, std::vector<uint8_t> &positions);
+// have the same one. The wide pair has the positions of clapwrapper/wide_speakers.h,
+// only for a plugin that takes them.
+bool positionsOf(const AudioChannelLayout &layout, std::vector<uint8_t> &positions,
+                 bool wideSpeakers = false);
+bool positionsOf(AudioChannelLayoutTag tag, std::vector<uint8_t> &positions, bool wideSpeakers = false);
 
-// The layout tags a plugin's main busses are asked about, mono to Atmos 7.1.4, several
+// The layout tags a plugin's main busses are asked about, mono to Atmos 9.1.6, several
 // of them in more than one channel order, as hosts such as Logic use them.
 const std::vector<AudioChannelLayoutTag> &candidateTags();
 

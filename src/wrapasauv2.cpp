@@ -1490,7 +1490,7 @@ bool WrapAsAUV2::probeChannelLayouts(bool hasMainIn, bool hasNonMain)
   {
     std::vector<uint8_t> positions, ordered;
     std::vector<uint32_t> from;
-    if (!layouts::positionsOf(tag, positions)) continue;
+    if (!layouts::positionsOf(tag, positions, _plugin->_ext._wideSpeakers != nullptr)) continue;
     layouts::inClapOrder(positions, ordered, from);
     auto found = std::find(maps.begin(), maps.end(), ordered);
     if (found == maps.end()) found = maps.insert(maps.end(), ordered);
@@ -1550,14 +1550,18 @@ bool WrapAsAUV2::layoutForBus(AudioUnitScope scope, AudioUnitElement element, ui
     std::vector<std::byte> storage(std::max<size_t>(size, sizeof(AudioChannelLayout)));
     auto *layout = reinterpret_cast<AudioChannelLayout *>(storage.data());
     bus.GetAudioChannelLayout(layout, writable);
-    if (!layouts::positionsOf(*layout, positions) || positions.size() != channels) return false;
+    if (!layouts::positionsOf(*layout, positions, _plugin->_ext._wideSpeakers != nullptr) ||
+        positions.size() != channels)
+      return false;
   }
   else
   {
     const auto found =
         std::find_if(tags.begin(), tags.end(), [channels](AudioChannelLayoutTag tag)
                      { return AudioChannelLayoutTag_GetNumberOfChannels(tag) == channels; });
-    if (found == tags.end() || !layouts::positionsOf(*found, positions)) return false;
+    if (found == tags.end() ||
+        !layouts::positionsOf(*found, positions, _plugin->_ext._wideSpeakers != nullptr))
+      return false;
     AudioChannelLayout layout{};
     layout.mChannelLayoutTag = *found;
     if (bus.SetAudioChannelLayout(layout) == noErr)
