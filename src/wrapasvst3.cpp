@@ -628,8 +628,9 @@ tresult PLUGIN_API ClapAsVst3::setBusArrangements(Vst::SpeakerArrangement *input
     };
 
     // a plugin that does not know CLAP_PORT_SURROUND may refuse the described set; the
-    // channel counts on their own are still worth asking for, as they always were
-    if (apply(requests) || (describesLayout && apply(undescribed)))
+    // channel counts on their own are still worth asking for, as they always were, but not
+    // of a plugin with clap.surround, which read the layout and refused it
+    if (apply(requests) || (describesLayout && !_plugin->_ext._surround && apply(undescribed)))
     {
       setupAudioBusses(_plugin->_plugin, _plugin->_ext._audioports);
       return super::setBusArrangements(inputs, numIns, outputs, numOuts);
