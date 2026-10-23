@@ -102,6 +102,13 @@ class ProcessAdapter
   void process(ProcessData &data);  // AU Data
   void flush();
 
+  // For each bus, the AU channel handed to the plugin as each of its channels, which
+  // puts an AU channel layout into CLAP's order (see channellayouts.h). A bus with no
+  // list is handed its channels in the AU's order. Set after setupProcessing, never
+  // while rendering.
+  void setChannelOrders(std::vector<std::vector<uint32_t>> inputs,
+                        std::vector<std::vector<uint32_t>> outputs);
+
   // interface for AUv2 wrapper:
   void addMIDIEvent(UInt32 inStatus, UInt32 inData1, UInt32 inData2, UInt32 inOffsetSampleFrame);
   // a single MIDI 2.0 Universal MIDI Packet message (1..4 words) forwarded raw
@@ -166,6 +173,8 @@ class ProcessAdapter
 
   clap_audio_buffer_t *_input_ports = nullptr;
   clap_audio_buffer_t *_output_ports = nullptr;
+  std::vector<std::vector<uint32_t>> _inputOrders;
+  std::vector<std::vector<uint32_t>> _outputOrders;
   clap_event_transport_t _transport = {};
   clap_input_events_t _in_events = {};
   clap_output_events_t _out_events = {};

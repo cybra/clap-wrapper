@@ -417,6 +417,10 @@ class WrapAsAUV2 : public ausdk::AUBase,
  protected:
   UInt32 GetAudioChannelLayout(AudioUnitScope scope, AudioUnitElement element,
                                AudioChannelLayout *outLayoutPtr, bool &outWritable) override;
+  // The layout tags a main bus takes, for a plugin that says which speaker each
+  // channel is for (see probeChannelLayouts); none for any other bus.
+  std::vector<AudioChannelLayoutTag> GetChannelLayoutTags(AudioUnitScope scope,
+                                                          AudioUnitElement element) override;
 
  public:
   bool CanScheduleParameters() const override
@@ -961,6 +965,35 @@ class WrapAsAUV2 : public ausdk::AUBase,
   // alternate layouts are asked about (and so how many
   // can_apply_configuration calls a single instantiation makes).
   static constexpr uint32_t kMaxProbedChannels = 8;
+
+  // Channel layouts, for a plugin with clap.surround: the layout tags its main
+  // busses take, found by the PostConstructor probe and offered to the host as
+  // each main bus's supported channel layouts, and for each bus the AU channel
+  // handed to the plugin as each of its channels, which puts the channels in
+  // CLAP's order, as a VST3 host gives them (see channellayouts.h).
+  std::vector<AudioChannelLayoutTag> _inputLayoutTags, _outputLayoutTags;
+  std::vector<std::vector<uint32_t>> _inputChannelOrders, _outputChannelOrders;
+
+  // Asks the plugin about each candidate layout tag on its main busses, recording
+  // the tags it takes and what each makes every bus, which also gives the channel
+  // counts above kMaxProbedChannels. Returns whether the ports moved.
+  // [main-thread & !active]
+  bool probeChannelLayouts(bool hasMainIn, bool hasNonMain);
+  // mainBusConfigurationRequests, with the main busses described by these channel
+  // maps in CLAP's order; null for a scope without a main bus.
+  std::vector<clap_audio_port_configuration_request_t> describedMainBusRequests(
+      const std::vector<uint8_t> *inMap, const std::vector<uint8_t> *outMap,
+      uint32_t nonMainChannels) const;
+  // The channel map of a scope's main port as the plugin states it now.
+  // [main-thread & !active]
+  bool mainChannelMap(bool isInput, std::vector<uint8_t> &map) const;
+  // The speakers a main bus is given to the plugin as: the layout the host set
+  // on it or, when it set only a channel count, the first layout the plugin
+  // takes with that many channels, which is then set on the bus so the host can
+  // read it. \p map is in CLAP's order, and \p order says which AU channel each
+  // of its channels comes from. False for a bus with no layouts to take.
+  bool layoutForBus(AudioUnitScope scope, AudioUnitElement element, uint32_t channels,
+                    std::vector<uint8_t> &map, std::vector<uint32_t> &order);
 
   uint32_t _midi_preferred_dialect = 0;
   uint32_t _midi_supported_dialects = 0;

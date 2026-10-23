@@ -176,6 +176,13 @@ void ProcessAdapter::setupProcessing(ausdk::AUScope &audioInputs, ausdk::AUScope
   _activeNotes.reserve(32);
 }
 
+void ProcessAdapter::setChannelOrders(std::vector<std::vector<uint32_t>> inputs,
+                                      std::vector<std::vector<uint32_t>> outputs)
+{
+  _inputOrders = std::move(inputs);
+  _outputOrders = std::move(outputs);
+}
+
 void ProcessAdapter::sortEventIndices()
 {
   // just sorting the index
@@ -299,10 +306,12 @@ void ProcessAdapter::process(ProcessData &data)
         AudioBufferList &myInBuffers = m.GetBufferList();
         auto num = myInBuffers.mNumberBuffers;
         this->_input_ports[i].channel_count = num;
+        const bool reorder = i < _inputOrders.size() && _inputOrders[i].size() == num;
         for (uint32_t j = 0; j < num; ++j)
         {
-          assert(myInBuffers.mBuffers[j].mNumberChannels == 1);
-          this->_input_ports[i].data32[j] = (float *)myInBuffers.mBuffers[j].mData;
+          const uint32_t from = reorder ? _inputOrders[i][j] : j;
+          assert(myInBuffers.mBuffers[from].mNumberChannels == 1);
+          this->_input_ports[i].data32[j] = (float *)myInBuffers.mBuffers[from].mData;
         }
         // _input_ports[0].data32 = myInBuffers[0].mData;
       }
@@ -339,10 +348,12 @@ void ProcessAdapter::process(ProcessData &data)
     AudioBufferList &myOutBuffers = m.PrepareBuffer(data.numSamples);
     auto num = myOutBuffers.mNumberBuffers;
     this->_output_ports[i].channel_count = num;
+    const bool reorder = i < _outputOrders.size() && _outputOrders[i].size() == num;
     for (uint32_t j = 0; j < num; ++j)
     {
-      assert(myOutBuffers.mBuffers[j].mNumberChannels == 1);
-      this->_output_ports[i].data32[j] = (float *)myOutBuffers.mBuffers[j].mData;
+      const uint32_t from = reorder ? _outputOrders[i][j] : j;
+      assert(myOutBuffers.mBuffers[from].mNumberChannels == 1);
+      this->_output_ports[i].data32[j] = (float *)myOutBuffers.mBuffers[from].mData;
       // placeholder AU output busses beyond the plugin's declared CLAP ports are
       // not written by the plugin, so emit silence rather than leaving them stale.
       if (i >= _clapNumOutputs)

@@ -1,6 +1,8 @@
 #include "generated_entrypoints.hxx"
 #include "detail/auv2/process.h"
+#include "detail/auv2/channellayouts.h"
 #include <set>
+#include <cstddef>
 #include <limits>
 #include <cassert>
 #include <cstring>
@@ -1381,6 +1383,24 @@ void WrapAsAUV2::addOutputBus(int bus, const clap_audio_port_info_t *info)
   busref.SetStreamFormat(sf);
 }
 
+// Describes a request by a channel map in CLAP's order, which must outlive it:
+// mono and stereo as such, anything else as a surround port with that map.
+static void describeRequest(clap_audio_port_configuration_request_t &request,
+                            const std::vector<uint8_t> &map)
+{
+  request.channel_count = static_cast<uint32_t>(map.size());
+  request.port_details = nullptr;
+  if (map.size() == 1 && map[0] == CLAP_SURROUND_FC)
+    request.port_type = CLAP_PORT_MONO;
+  else if (map.size() == 2 && map[0] == CLAP_SURROUND_FL && map[1] == CLAP_SURROUND_FR)
+    request.port_type = CLAP_PORT_STEREO;
+  else
+  {
+    request.port_type = CLAP_PORT_SURROUND;
+    request.port_details = map.data();
+  }
+}
+
 std::vector<clap_audio_port_configuration_request_t> WrapAsAUV2::mainBusConfigurationRequests(
     uint32_t mainInChannels, uint32_t mainOutChannels, uint32_t nonMainChannels) const
 {
@@ -1411,6 +1431,141 @@ std::vector<clap_audio_port_configuration_request_t> WrapAsAUV2::mainBusConfigur
                _outputPortCache[i].isMain ? mainOutChannels : nonMain(_outputPortCache[i].channelCount));
 
   return requests;
+}
+
+std::vector<clap_audio_port_configuration_request_t> WrapAsAUV2::describedMainBusRequests(
+    const std::vector<uint8_t> *inMap, const std::vector<uint8_t> *outMap,
+    uint32_t nonMainChannels) const
+{
+  auto requests =
+      mainBusConfigurationRequests(inMap ? static_cast<uint32_t>(inMap->size()) : 0,
+                                   outMap ? static_cast<uint32_t>(outMap->size()) : 0, nonMainChannels);
+  for (size_t i = 0; i < requests.size(); ++i)
+  {
+    const bool isInput = i < _inputPortCache.size();
+    const auto &port = isInput ? _inputPortCache[i] : _outputPortCache[i - _inputPortCache.size()];
+    const auto *map = isInput ? inMap : outMap;
+    if (port.isMain && map) describeRequest(requests[i], *map);
+  }
+  return requests;
+}
+
+bool WrapAsAUV2::mainChannelMap(bool isInput, std::vector<uint8_t> &map) const
+{
+  auto ap = _plugin->_ext._audioports;
+  auto pl = _plugin->_plugin;
+  const auto count = ap->count(pl, isInput);
+  for (uint32_t i = 0; i < count; ++i)
+  {
+    clap_audio_port_info info{};
+    if (!ap->get(pl, i, isInput, &info) || !(info.flags & CLAP_AUDIO_PORT_IS_MAIN)) continue;
+    if (!info.port_type) return false;
+    if (!strcmp(info.port_type, CLAP_PORT_MONO) && info.channel_count == 1)
+      map = {CLAP_SURROUND_FC};
+    else if (!strcmp(info.port_type, CLAP_PORT_STEREO) && info.channel_count == 2)
+      map = {CLAP_SURROUND_FL, CLAP_SURROUND_FR};
+    else if (!strcmp(info.port_type, CLAP_PORT_SURROUND) && _plugin->_ext._surround)
+    {
+      map.resize(info.channel_count);
+      const auto got =
+          _plugin->_ext._surround->get_channel_map(pl, isInput, i, map.data(), info.channel_count);
+      if (got != info.channel_count) return false;
+    }
+    else
+      return false;
+    return true;
+  }
+  return false;
+}
+
+bool WrapAsAUV2::probeChannelLayouts(bool hasMainIn, bool hasNonMain)
+{
+  namespace layouts = Clap::AUv2::ChannelLayouts;
+
+  // Each candidate's speakers in CLAP's order. Tags for the same speakers in
+  // different orders are asked about once, as the plugin sees them alike.
+  std::vector<std::vector<uint8_t>> maps;
+  std::vector<std::pair<AudioChannelLayoutTag, size_t>> tags;
+  for (auto tag : layouts::candidateTags())
+  {
+    std::vector<uint8_t> positions, ordered;
+    std::vector<uint32_t> from;
+    if (!layouts::positionsOf(tag, positions)) continue;
+    layouts::inClapOrder(positions, ordered, from);
+    auto found = std::find(maps.begin(), maps.end(), ordered);
+    if (found == maps.end()) found = maps.insert(maps.end(), ordered);
+    tags.emplace_back(tag, static_cast<size_t>(found - maps.begin()));
+  }
+
+  std::vector<bool> inTaken(maps.size()), outTaken(maps.size());
+  bool moved = false;
+  auto *cap = _plugin->_ext._configurable_audio_ports;
+  const size_t inChoices = hasMainIn ? maps.size() : 1;
+  for (size_t in = 0; in < inChoices; ++in)
+  {
+    const auto *inMap = hasMainIn ? &maps[in] : nullptr;
+    const auto inChannels = inMap ? static_cast<uint32_t>(inMap->size()) : 0;
+    for (size_t out = 0; out < maps.size(); ++out)
+    {
+      // The two shapes of the channel-count probe, the second only when there
+      // are non-main ports to take along.
+      for (uint32_t nonMain : {uint32_t{0}, inChannels})
+      {
+        if (nonMain != 0 && !hasNonMain) continue;
+        auto requests = describedMainBusRequests(inMap, &maps[out], nonMain);
+        const auto size = static_cast<uint32_t>(requests.size());
+        if (!cap->can_apply_configuration(_plugin->_plugin, requests.data(), size)) continue;
+        if (!cap->apply_configuration(_plugin->_plugin, requests.data(), size)) continue;
+
+        moved = true;
+        if (hasMainIn) inTaken[in] = true;
+        outTaken[out] = true;
+        _channelCapsCache.push_back({inChannels, static_cast<uint32_t>(maps[out].size())});
+        recordBusChannelCounts(_channelCapsCache.back());
+      }
+    }
+  }
+
+  for (const auto &[tag, map] : tags)
+  {
+    if (hasMainIn && inTaken[map]) _inputLayoutTags.push_back(tag);
+    if (outTaken[map]) _outputLayoutTags.push_back(tag);
+  }
+  return moved;
+}
+
+bool WrapAsAUV2::layoutForBus(AudioUnitScope scope, AudioUnitElement element, uint32_t channels,
+                              std::vector<uint8_t> &map, std::vector<uint32_t> &order)
+{
+  namespace layouts = Clap::AUv2::ChannelLayouts;
+  const auto &tags = (scope == kAudioUnitScope_Input) ? _inputLayoutTags : _outputLayoutTags;
+  if (tags.empty()) return false;
+
+  auto &bus = IOElement(scope, element);
+  std::vector<uint8_t> positions;
+  bool writable = false;
+  const UInt32 size = bus.GetAudioChannelLayout(nullptr, writable);
+  if (size > 0)
+  {
+    std::vector<std::byte> storage(std::max<size_t>(size, sizeof(AudioChannelLayout)));
+    auto *layout = reinterpret_cast<AudioChannelLayout *>(storage.data());
+    bus.GetAudioChannelLayout(layout, writable);
+    if (!layouts::positionsOf(*layout, positions) || positions.size() != channels) return false;
+  }
+  else
+  {
+    const auto found =
+        std::find_if(tags.begin(), tags.end(), [channels](AudioChannelLayoutTag tag)
+                     { return AudioChannelLayoutTag_GetNumberOfChannels(tag) == channels; });
+    if (found == tags.end() || !layouts::positionsOf(*found, positions)) return false;
+    AudioChannelLayout layout{};
+    layout.mChannelLayoutTag = *found;
+    if (bus.SetAudioChannelLayout(layout) == noErr)
+      PropertyChanged(kAudioUnitProperty_AudioChannelLayout, scope, element);
+  }
+
+  layouts::inClapOrder(positions, map, order);
+  return true;
 }
 
 void WrapAsAUV2::recordBusChannelCounts(ChannelCapsCache &caps) const
@@ -1463,6 +1618,9 @@ void WrapAsAUV2::refreshPortCachesAndBusses()
 
 bool WrapAsAUV2::applyConfigurationFromBusFormats()
 {
+  _inputChannelOrders.clear();
+  _outputChannelOrders.clear();
+
   // Nothing to reconcile unless the PostConstructor probe found alternate
   // layouts: without them ValidFormat pinned every bus to its port's count.
   if (_channelCapsCache.empty() || !_plugin->_ext._audioports ||
@@ -1503,6 +1661,14 @@ bool WrapAsAUV2::applyConfigurationFromBusFormats()
     requests.push_back(request);
   };
 
+  // A main bus of a plugin that takes channel layouts is described by its
+  // speakers, and its channels are handed over in CLAP's order. The maps are
+  // sized once, so the requests can point into them.
+  std::vector<std::vector<uint8_t>> maps(_inputPortCache.size() + _outputPortCache.size());
+  _inputChannelOrders.resize(_inputPortCache.size());
+  _outputChannelOrders.resize(_outputPortCache.size());
+  bool described = false;
+
   for (size_t i = 0; i < _inputPortCache.size() && i < numInputElements; ++i)
   {
     const uint32_t channels =
@@ -1510,6 +1676,13 @@ bool WrapAsAUV2::applyConfigurationFromBusFormats()
     mismatch |= (channels != _inputPortCache[i].channelCount);
     if (_inputPortCache[i].isMain) mainInChannels = channels;
     addRequest(true, i, channels);
+    if (_inputPortCache[i].isMain &&
+        layoutForBus(kAudioUnitScope_Input, static_cast<AudioUnitElement>(i), channels, maps[i],
+                     _inputChannelOrders[i]))
+    {
+      describeRequest(requests.back(), maps[i]);
+      described = true;
+    }
   }
   for (size_t i = 0; i < _outputPortCache.size() && i < numOutputElements; ++i)
   {
@@ -1518,9 +1691,17 @@ bool WrapAsAUV2::applyConfigurationFromBusFormats()
     mismatch |= (channels != _outputPortCache[i].channelCount);
     if (_outputPortCache[i].isMain) mainOutChannels = channels;
     addRequest(false, i, channels);
+    auto &map = maps[_inputPortCache.size() + i];
+    if (_outputPortCache[i].isMain &&
+        layoutForBus(kAudioUnitScope_Output, static_cast<AudioUnitElement>(i), channels, map,
+                     _outputChannelOrders[i]))
+    {
+      describeRequest(requests.back(), map);
+      described = true;
+    }
   }
 
-  if (!mismatch) return true;
+  if (!mismatch && !described) return true;
 
   const bool applied = _plugin->_ext._configurable_audio_ports->apply_configuration(
       _plugin->_plugin, requests.data(), static_cast<uint32_t>(requests.size()));
@@ -1615,6 +1796,7 @@ bool WrapAsAUV2::activateCLAP()
                                        this, &_parametertree, this, maxSampleFrames,
                                        _midi_preferred_dialect, _midi_supported_dialects,
                                        clapAudioInputs, clapAudioOutputs);
+      _processAdapter->setChannelOrders(_inputChannelOrders, _outputChannelOrders);
       // The deactivated-state flush adapter has no further use: its parameter
       // events have just been delivered, and the gestures it was tracking belong
       // to the real one now.
@@ -2610,6 +2792,12 @@ void WrapAsAUV2::PostConstructor()
       const uint32_t minIn = currentIn ? 1 : 0, maxIn = currentIn ? kMaxProbedChannels : 0;
       const uint32_t minOut = currentOut ? 1 : 0, maxOut = currentOut ? kMaxProbedChannels : 0;
 
+      // The main busses' speakers as the plugin has them now, to put it back
+      // to exactly these once the probes below have moved it.
+      std::vector<uint8_t> currentInMap, currentOutMap;
+      const bool describedNow = (!hasMainIn || mainChannelMap(true, currentInMap)) &&
+                                (!hasMainOut || mainChannelMap(false, currentOutMap));
+
       // Each candidate is applied rather than merely asked about: only
       // apply_configuration says what the ports became, and ValidFormat has to
       // know that for every bus, not just the main ones. The plugin is put
@@ -2647,16 +2835,33 @@ void WrapAsAUV2::PostConstructor()
         }
       }
 
+      // Then each layout tag on the main busses, for a plugin that says which
+      // speaker each channel is for: the tags it takes are offered to the host
+      // as the busses' supported channel layouts.
+      if (_plugin->_ext._surround && hasMainOut && describedNow)
+      {
+        const bool hasNonMain = std::any_of(_inputPortCache.begin(), _inputPortCache.end(),
+                                            [](const AudioPortCache &port) { return !port.isMain; }) ||
+                                std::any_of(_outputPortCache.begin(), _outputPortCache.end(),
+                                            [](const AudioPortCache &port) { return !port.isMain; });
+        moved |= probeChannelLayouts(hasMainIn, hasNonMain);
+        LOGINFO("[clap-wrapper] PostConstructor: {} input and {} output channel layouts",
+                _inputLayoutTags.size(), _outputLayoutTags.size());
+      }
+
       if (moved)
       {
         // mainBusConfigurationRequests reads the port caches, which the probe
         // does not touch, so this is the request set that produced the active
-        // layout. If it will not go back the caches have to be made to
+        // layout -- described by the speakers the plugin had, when it said. If
+        // it will not go back the caches have to be made to
         // describe whatever the ports now are -- they are the wrapper's only
         // record of the live layout, and one that lied about it would make
         // every format the host set look like it already matched, so nothing
         // would ever be pushed.
-        auto restore = mainBusConfigurationRequests(currentIn, currentOut);
+        auto restore = describedNow ? describedMainBusRequests(hasMainIn ? &currentInMap : nullptr,
+                                                               hasMainOut ? &currentOutMap : nullptr, 0)
+                                    : mainBusConfigurationRequests(currentIn, currentOut);
         if (!_plugin->_ext._configurable_audio_ports->apply_configuration(
                 _plugin->_plugin, restore.data(), static_cast<uint32_t>(restore.size())))
         {
@@ -2718,8 +2923,22 @@ void WrapAsAUV2::PostConstructor()
 UInt32 WrapAsAUV2::GetAudioChannelLayout(AudioUnitScope scope, AudioUnitElement element,
                                          AudioChannelLayout *outLayoutPtr, bool &outWritable)
 {
-  // TODO: This is never called so the layout is never found
+  // The layout the host set on the bus, or the one the wrapper chose for it
+  // (see layoutForBus).
   return Base::GetAudioChannelLayout(scope, element, outLayoutPtr, outWritable);
+}
+
+std::vector<AudioChannelLayoutTag> WrapAsAUV2::GetChannelLayoutTags(AudioUnitScope scope,
+                                                                    AudioUnitElement element)
+{
+  if (scope == kAudioUnitScope_Input || scope == kAudioUnitScope_Output)
+  {
+    const bool isInput = (scope == kAudioUnitScope_Input);
+    const auto &cache = isInput ? _inputPortCache : _outputPortCache;
+    const auto &tags = isInput ? _inputLayoutTags : _outputLayoutTags;
+    if (element < cache.size() && cache[element].isMain && !tags.empty()) return tags;
+  }
+  return Base::GetChannelLayoutTags(scope, element);
 }
 
 void WrapAsAUV2::send(const Clap::AUv2::clap_multi_event_t &event)
