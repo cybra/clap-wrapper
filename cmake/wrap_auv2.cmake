@@ -28,6 +28,13 @@ function(target_add_auv2_wrapper)
             # - JUCE (use the JUCE AUV2 default)
             DICTIONARY_STREAM_FORMAT
 
+            # The dictionary key the plugin's own state is kept under beside the
+            # AUSDK's keys, for a plugin released before with its state under that
+            # key, so its users' sessions and presets open with their settings.
+            # Setting it chooses the JUCE schema with this key in place of
+            # jucePluginState.
+            STATE_KEY
+
             # These two are aliases of each other but the one without the X
             # came first and doesn't match the rest of CMake naming standards
             MACOS_EMBEDDED_CLAP_LOCATION
@@ -239,7 +246,10 @@ function(target_add_auv2_wrapper)
             
 	    ${bhtgoutdir}/generated_entrypoints.hxx)
     target_compile_options(${AUV2_TARGET} PRIVATE -fno-char8_t)
-    if (DEFINED AUV2_DICTIONARY_STREAM_FORMAT)
+    if (NOT "${AUV2_STATE_KEY}" STREQUAL "")
+        target_compile_definitions(${AUV2_TARGET} PRIVATE DICTIONARY_STREAM_FORMAT_JUCE=1
+            "CLAP_WRAPPER_AUV2_STATE_KEY=\"${AUV2_STATE_KEY}\"")
+    elseif (DEFINED AUV2_DICTIONARY_STREAM_FORMAT)
         # valud options check
         set (sf ${AUV2_DICTIONARY_STREAM_FORMAT})
         if (NOT ((${sf} STREQUAL "JUCE") OR (${sf} STREQUAL "WRAPPER")))

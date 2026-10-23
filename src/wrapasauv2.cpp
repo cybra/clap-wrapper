@@ -1,6 +1,11 @@
 #include "generated_entrypoints.hxx"
 #include "detail/auv2/process.h"
 #include "detail/auv2/channellayouts.h"
+
+// The key the JUCE schema keeps the plugin's state under, unless STATE_KEY names another.
+#ifndef CLAP_WRAPPER_AUV2_STATE_KEY
+#define CLAP_WRAPPER_AUV2_STATE_KEY "jucePluginState"
+#endif
 #include <set>
 #include <cstddef>
 #include <limits>
@@ -2410,7 +2415,7 @@ OSStatus WrapAsAUV2::SaveState(CFPropertyListRef *ptPList)
     CFDataRef tData = CFDataCreate(0, (UInt8 *)chunk.data(), chunk.size());
     CFMutableDictionaryRef dict = (CFMutableDictionaryRef)*ptPList;
 
-    CFDictionarySetValue(dict, CFSTR("jucePluginState"), tData);
+    CFDictionarySetValue(dict, CFSTR(CLAP_WRAPPER_AUV2_STATE_KEY), tData);
     CFRelease(tData);
     chunk.clear();
 #else
@@ -2480,8 +2485,8 @@ OSStatus WrapAsAUV2::RestoreState(CFPropertyListRef plist)
    * you want to read the juce key from the dictionary.
    */
   CFDataRef juceData{nullptr};
-  CFStringRef juceKey(
-      CFStringCreateWithCString(kCFAllocatorDefault, "jucePluginState", kCFStringEncodingUTF8));
+  CFStringRef juceKey(CFStringCreateWithCString(kCFAllocatorDefault, CLAP_WRAPPER_AUV2_STATE_KEY,
+                                                kCFStringEncodingUTF8));
   bool valuePresent = CFDictionaryGetValueIfPresent(tDict, juceKey, (const void **)&juceData);
   CFRelease(juceKey);
   if (valuePresent && juceData)
