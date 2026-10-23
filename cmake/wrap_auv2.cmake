@@ -3,6 +3,7 @@ function(target_add_auv2_wrapper)
     set(oneValueArgs
             TARGET
             OUTPUT_NAME
+            NAME  # the unit's name in hosts, after its maker's; OUTPUT_NAME if not given
             BUNDLE_IDENTIFIER
             BUNDLE_VERSION
             RESOURCE_DIRECTORY
@@ -182,6 +183,10 @@ function(target_add_auv2_wrapper)
             set(AUV2_INSTRUMENT_TYPE "aumu")
         endif ()
 
+        if ("${AUV2_NAME}" STREQUAL "")
+            set(AUV2_NAME "${AUV2_OUTPUT_NAME}")
+        endif ()
+
         add_custom_command(
                 TARGET ${bhtg}
                 POST_BUILD
@@ -189,7 +194,7 @@ function(target_add_auv2_wrapper)
                 BYPRODUCTS ${bhtgoutdir}/auv2_Info.plist ${bhtgoutdir}/generated_entrypoints.hxx
                 COMMAND codesign -s - -f "$<TARGET_FILE:${bhtg}>"
                 COMMAND $<TARGET_FILE:${bhtg}> --explicit
-                "${AUV2_OUTPUT_NAME}" "${AUV2_BUNDLE_VERSION}"
+                "${AUV2_NAME}" "${AUV2_BUNDLE_VERSION}"
                 "${AUV2_INSTRUMENT_TYPE}" "${AUV2_SUBTYPE_CODE}"
                 "${AUV2_MANUFACTURER_CODE}" "${AUV2_MANUFACTURER_NAME}"
         )

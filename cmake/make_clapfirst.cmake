@@ -44,6 +44,7 @@ function(make_clapfirst_plugins)
             ASSET_OUTPUT_DIRECTORY
             RESOURCE_DIRECTORY # Entire directory to be copied into a bundle/folder's resources
 
+            AUV2_NAME # The unit's name in hosts, after its maker's; OUTPUT_NAME if absent
             AUV2_MANUFACTURER_NAME # The AUV2 info. If absent we will probe the CLAP for the
             AUV2_MANUFACTURER_CODE # auv2 extension
             AUV2_SUBTYPE_CODE
@@ -194,6 +195,7 @@ function(make_clapfirst_plugins)
                     BUNDLE_VERSION "${C1ST_BUNDLE_VERSION}"
                     RESOURCE_DIRECTORY "${C1ST_RESOURCE_DIRECTORY}"
 
+                    NAME "${C1ST_AUV2_NAME}"
                     MANUFACTURER_NAME "${C1ST_AUV2_MANUFACTURER_NAME}"
                     MANUFACTURER_CODE "${C1ST_AUV2_MANUFACTURER_CODE}"
                     SUBTYPE_CODE "${C1ST_AUV2_SUBTYPE_CODE}"
