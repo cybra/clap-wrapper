@@ -12,8 +12,10 @@
 #include <cassert>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
+#include <thread>
 #include <Block.h>
 
 extern bool fillAudioUnitCocoaView(AudioUnitCocoaViewInfo *viewInfo, std::shared_ptr<Clap::Plugin>);
@@ -809,6 +811,7 @@ OSStatus WrapAsAUV2::SetParameter(AudioUnitParameterID inID, AudioUnitScope inSc
       if (_processAdapter)
       {
         _processAdapter->addParameterEvent(param, inValue, inBufferOffsetInFrames);
+        _hostValuesQueued = true;
       }
       else if (auto *flushAdapter = ensureFlushAdapter())
       {
@@ -824,6 +827,7 @@ OSStatus WrapAsAUV2::SetParameter(AudioUnitParameterID inID, AudioUnitScope inSc
         // deactivated-state flush uses, and is handed over on the next idle
         // tick or at activation, whichever comes first (see activateCLAP()).
         flushAdapter->addParameterEvent(param, inValue, inBufferOffsetInFrames);
+        _hostValuesQueued = true;
       }
     }
 
@@ -1765,6 +1769,8 @@ bool WrapAsAUV2::activateCLAP()
     const double blockMs = 1000.0 * static_cast<double>(maxSampleFrames) / sampleRate;
     const auto ticks = static_cast<uint32_t>(std::ceil(3.0 * blockMs / kIdleTickMs));
     _idleTicksBeforeFlush = std::max(kMinIdleTicksBeforeFlush, ticks);
+    _blockMs = blockMs;
+    _lastRenderTicks = 0;
 
     // the plugin's actually-declared audio port counts (0 when it has no
     // audio-ports extension); these may be fewer than the AU element counts
@@ -1798,6 +1804,7 @@ bool WrapAsAUV2::activateCLAP()
       {
         auto guarantee_mainthread = _plugin->AlwaysMainThread();
         _flushAdapter->flush();
+        _hostValuesQueued = false;
       }
 
       if (!_processAdapter) _processAdapter = std::make_unique<Clap::AUv2::ProcessAdapter>();
@@ -1968,6 +1975,8 @@ OSStatus WrapAsAUV2::Render(AudioUnitRenderActionFlags &inFlags, const AudioTime
     // This render carried whatever was queued in either direction, so the next
     // idle tick has nothing to make up for. See onIdle().
     _renderedSinceIdle = true;
+    _hostValuesQueued = false;
+    _lastRenderTicks = std::chrono::steady_clock::now().time_since_epoch().count();
 
     {
       for (auto &i : _midi_outports)
@@ -2341,6 +2350,7 @@ void WrapAsAUV2::onIdle()
       auto guarantee_mainthread = _plugin->AlwaysMainThread();
       flushParameters();
     }
+    _hostValuesQueued = false;
   }
 
   // Announce anything the flush just produced in this tick rather than the next.
@@ -2391,6 +2401,48 @@ void WrapAsAUV2::flushParameters()
   }
 }
 
+// A value the host sets reaches the plugin with the next render or idle flush,
+// but the host reads it back from the unit at once (AUBase keeps it), so a
+// state saved in between would leave it out: a host setting a value and saving
+// straight after, before any render or with the transport stopped, got the old
+// one. While the host is rendering, the next render carries it, so
+// this waits for that, no longer than the idle tick waits before deciding the
+// host has stopped; flushing here instead would hold the process lock across
+// a render, which renders silence rather than wait. Otherwise the values are
+// handed over here, as the idle tick would hand them over.
+void WrapAsAUV2::handOverHostValues()
+{
+  using clock = std::chrono::steady_clock;
+  const auto wait = std::chrono::duration_cast<clock::duration>(
+      std::chrono::duration<double, std::milli>(3.0 * _blockMs));
+  const auto rendering = [&]
+  {
+    const auto last = _lastRenderTicks.load();
+    return _initialized && last != 0 && clock::now() - clock::time_point(clock::duration(last)) < wait;
+  };
+  while (_hostValuesQueued && rendering())
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  // Checked before the lock too, so a save with nothing queued never takes it.
+  if (!_hostValuesQueued) return;
+  ClapWrapper::detail::shared::SpinLockGuard processGuard(_processLock);
+  if (!_hostValuesQueued) return;
+  _hostValuesQueued = false;
+
+  if (_initialized && _processAdapter)
+  {
+    auto guarantee_audiothread = _plugin->AlwaysAudioThread();
+    _processAdapter->flush();
+  }
+  else
+  {
+    auto guarantee_mainthread = _plugin->AlwaysMainThread();
+    flushParameters();
+  }
+}
+
 OSStatus WrapAsAUV2::SaveState(CFPropertyListRef *ptPList)
 {
   if (!ptPList) return kAudioUnitErr_InvalidParameter;
@@ -2398,6 +2450,8 @@ OSStatus WrapAsAUV2::SaveState(CFPropertyListRef *ptPList)
   // The plugin is made with the unit, so its state is there to save before the
   // unit is initialized and after it is uninitialized, as hosts save sessions.
   if (!_plugin) return kAudioUnitErr_Uninitialized;
+
+  handOverHostValues();
 
   auto guarantee_mainthread = _plugin->AlwaysMainThread();
 

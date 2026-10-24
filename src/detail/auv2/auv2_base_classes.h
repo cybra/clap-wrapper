@@ -883,6 +883,9 @@ class WrapAsAUV2 : public ausdk::AUBase,
   // parameter-only round trip on the deactivated-case adapter, for when no render
   // is running to carry the events. Only legal while the CLAP is deactivated.
   void flushParameters();
+  // hands the plugin what the host has set and no render or flush has carried
+  // yet, before SaveState() reads the plugin's state. See the definition.
+  void handOverHostValues();
   // the AU-level half of the teardown, which an internal restart must not do
   void releaseHostMIDIOutput();
   bool IsBypassEffect()
@@ -1098,6 +1101,13 @@ class WrapAsAUV2 : public ausdk::AUBase,
   // set by Render(), cleared by onIdle(): tells the idle tick whether a render
   // has carried the plugin's events since it last looked. See onIdle().
   std::atomic_bool _renderedSinceIdle = false;
+  // set by SetParameter, cleared by whatever hands the queued values to the
+  // plugin (a render, the idle flush, activateCLAP()); read by SaveState().
+  std::atomic_bool _hostValuesQueued = false;
+  // when the last render ended, in steady_clock ticks, 0 before the first; and
+  // how long a block lasts, from activateCLAP(). See handOverHostValues().
+  std::atomic<int64_t> _lastRenderTicks = 0;
+  double _blockMs = 0.0;
   // consecutive idle ticks that saw no render, saturating at the point where the
   // idle tick takes over the flushing. Only onIdle() touches it.
   uint32_t _idleTicksSinceRender = 0;
