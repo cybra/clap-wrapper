@@ -886,6 +886,10 @@ class WrapAsAUV2 : public ausdk::AUBase,
   // hands the plugin what the host has set and no render or flush has carried
   // yet, before SaveState() reads the plugin's state. See the definition.
   void handOverHostValues();
+  // moves the values the host set for the start of a block, waiting in their
+  // parameters (see SetParameter), onto the process adapter while the CLAP is
+  // active, or the flush adapter while it isn't. Call under _processLock.
+  void takeHostValues();
   // the AU-level half of the teardown, which an internal restart must not do
   void releaseHostMIDIOutput();
   bool IsBypassEffect()
@@ -1104,6 +1108,9 @@ class WrapAsAUV2 : public ausdk::AUBase,
   // set by SetParameter, cleared by whatever hands the queued values to the
   // plugin (a render, the idle flush, activateCLAP()); read by SaveState().
   std::atomic_bool _hostValuesQueued = false;
+  // set by SetParameter when a value waits in its parameter, cleared by
+  // whatever takes the waiting values (takeHostValues()'s callers).
+  std::atomic_bool _hostValuesWaiting = false;
   // when the last render ended, in steady_clock ticks, 0 before the first; and
   // how long a block lasts, from activateCLAP(). See handOverHostValues().
   std::atomic<int64_t> _lastRenderTicks = 0;

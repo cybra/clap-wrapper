@@ -800,12 +800,26 @@ OSStatus WrapAsAUV2::SetParameter(AudioUnitParameterID inID, AudioUnitScope inSc
   if (inScope == kAudioUnitScope_Global)
   {
     auto p = _parametertree.find(inID);
-    if (p != _parametertree.end())
+    if (p != _parametertree.end() && inBufferOffsetInFrames == 0)
     {
-      // Fenced against onIdle(), the other consumer of the adapter's event
-      // queue. Render() holding the lock is not enough on its own: AUBase calls
-      // this from ScheduleParameter(), i.e. on the render thread but outside the
-      // render, so without this the queue would have two writers.
+      // A value for the start of the next block, from whichever thread sets it:
+      // a host sets its own controls from its main thread as the user drags
+      // them. It waits in its parameter, without the lock, which Render() only
+      // tries to take and renders silence when it can't; taking it here
+      // silenced whatever block began meanwhile. The next render takes it, or a
+      // flush while nothing renders (takeHostValues()'s callers). Values set
+      // between two blocks reach the plugin as the last of them, at the start of
+      // the block, where it would have heard them all.
+      p->second->setHostValue(inValue);
+      _hostValuesWaiting = true;
+      _hostValuesQueued = true;
+    }
+    else if (p != _parametertree.end())
+    {
+      // At a frame within the block: AUBase calls this from ScheduleParameter(),
+      // on the render thread but outside the render, where the lock holds up no
+      // render. Fenced against onIdle(), the other consumer of the adapter's
+      // event queue.
       ClapWrapper::detail::shared::SpinLockGuard processGuard(_processLock);
       auto &param = p->second.get()->info();
       if (_processAdapter)
@@ -1800,6 +1814,7 @@ bool WrapAsAUV2::activateCLAP()
       // or holds this same lock. Ordered before activate() on purpose: the
       // plugin then activates already holding the value, instead of being
       // handed it in its first process() cycle.
+      if (_hostValuesWaiting.exchange(false)) takeHostValues();
       if (_flushAdapter)
       {
         auto guarantee_mainthread = _plugin->AlwaysMainThread();
@@ -1872,6 +1887,7 @@ void WrapAsAUV2::deactivateCLAP()
       // plugin here -- it is still active until the deactivate() below, and a
       // flush at this point would have to claim the audio thread during
       // teardown.
+      if (_hostValuesWaiting.exchange(false)) takeHostValues();
       if (auto *flushAdapter = ensureFlushAdapter())
       {
         if (_processAdapter && _processAdapter->transferPendingParametersTo(*flushAdapter) > 0)
@@ -1970,12 +1986,16 @@ OSStatus WrapAsAUV2::Render(AudioUnitRenderActionFlags &inFlags, const AudioTime
 
     auto it_is = _plugin->AlwaysAudioThread();
 
+    if (_hostValuesWaiting.exchange(false)) takeHostValues();
+
     _processAdapter->process(data);
 
     // This render carried whatever was queued in either direction, so the next
-    // idle tick has nothing to make up for. See onIdle().
+    // idle tick has nothing to make up for. See onIdle(). Cleared once the plugin
+    // has heard the values, since a save waits on it; but a value set while it
+    // processed waits for the next render, and keeps it set.
     _renderedSinceIdle = true;
-    _hostValuesQueued = false;
+    if (!_hostValuesWaiting) _hostValuesQueued = false;
     _lastRenderTicks = std::chrono::steady_clock::now().time_since_epoch().count();
 
     {
@@ -2335,6 +2355,7 @@ void WrapAsAUV2::onIdle()
     // plugin is inside flush() is about events this flush cannot have seen, and
     // has to survive into the next tick.
     _requestedFlush = false;
+    if (_hostValuesWaiting.exchange(false)) takeHostValues();
 
     if (_initialized && _processAdapter)
     {
@@ -2430,6 +2451,7 @@ void WrapAsAUV2::handOverHostValues()
   ClapWrapper::detail::shared::SpinLockGuard processGuard(_processLock);
   if (!_hostValuesQueued) return;
   _hostValuesQueued = false;
+  if (_hostValuesWaiting.exchange(false)) takeHostValues();
 
   if (_initialized && _processAdapter)
   {
@@ -2440,6 +2462,17 @@ void WrapAsAUV2::handOverHostValues()
   {
     auto guarantee_mainthread = _plugin->AlwaysMainThread();
     flushParameters();
+  }
+}
+
+void WrapAsAUV2::takeHostValues()
+{
+  auto *adapter = _processAdapter ? _processAdapter.get() : ensureFlushAdapter();
+  if (!adapter) return;
+  float value = 0.0f;
+  for (auto &entry : _parametertree)
+  {
+    if (entry.second->takeHostValue(value)) adapter->addParameterEvent(entry.second->info(), value, 0);
   }
 }
 

@@ -16,6 +16,8 @@
 
 #include <clap/clap.h>
 
+#include <atomic>
+
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wextra"
@@ -57,11 +59,30 @@ class Parameter
   void updateInfo(const clap_plugin_t *plugin, const clap_plugin_params_t *clap_param_ext,
                   const clap_param_info_t &i);
 
+  // The last value the host set for the start of a block, from whichever thread
+  // set it, until a render or a flush hands it to the plugin. Kept here without
+  // a lock, so that setting a value never holds up a render. A value set while
+  // one is being taken can be taken twice, which the plugin hears as the same
+  // value again.
+  void setHostValue(float value)
+  {
+    _hostValue.store(value, std::memory_order_relaxed);
+    _hostValueWaiting.store(true, std::memory_order_release);
+  }
+  bool takeHostValue(float &value)
+  {
+    if (!_hostValueWaiting.exchange(false, std::memory_order_acquire)) return false;
+    value = _hostValue.load(std::memory_order_relaxed);
+    return true;
+  }
+
  private:
   clap_param_info_t _info;
   CFStringRef _cfstring = nullptr;
   AudioUnitParameterOptions _flags;
   AudioUnitParameterUnit _unit = kAudioUnitParameterUnit_Generic;
+  std::atomic<float> _hostValue{0.0f};
+  std::atomic<bool> _hostValueWaiting{false};
 };
 
 }  // namespace Clap::AUv2
