@@ -546,7 +546,7 @@ int main(int argc, char **argv)
 
       for (auto &c : strcid)
       {
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'A') || (c >= '0' && c <= '9'))
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
         {
         }
         else
